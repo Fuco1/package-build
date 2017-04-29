@@ -287,11 +287,7 @@ Returns the package version as a string."
 
 (defun package-build--checkout-git (name config dir)
   "Check package NAME with config CONFIG out of git into DIR."
-  (let ((repo (plist-get config :url))
-        (commit (or (plist-get config :commit)
-                    (let ((branch (plist-get config :branch)))
-                      (when branch
-                        (concat "origin/" branch))))))
+  (let ((repo (plist-get config :url)))
     (with-current-buffer (get-buffer-create "*package-build-checkout*")
       (goto-char (point-max))
       (cond
@@ -315,7 +311,10 @@ Returns the package version as a string."
             (package-build--update-git-to-ref dir (concat "tags/" tag))
             version)
         (package-build--update-git-to-ref
-         dir (or commit (concat "origin/" (package-build--git-head-branch dir))))
+         dir (or (plist-get config :commit)
+                 (concat "origin/"
+                         (or (plist-get config :branch)
+                             (package-build--git-head-branch dir)))))
         (package-build--parse-time
          (car (process-lines
                "git" "log" "--first-parent" "-n1" "--pretty=format:'\%ci'"
