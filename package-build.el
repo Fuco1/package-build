@@ -223,6 +223,11 @@ is used instead."
 (defun package-build--run-process (dir command &rest args)
   "In DIR (or `default-directory' if unset) run COMMAND with ARGS.
 Output is written to the current buffer."
+  (with-current-buffer (get-buffer-create "*package-build-checkout*")
+    (goto-char (point-max))
+    (apply 'package-build--run-process-1 dir command args)))
+
+(defun package-build--run-process-1 (dir command &rest args)
   (let ((default-directory (file-name-as-directory (or dir default-directory)))
         (argv (nconc (unless (eq system-type 'windows-nt)
                        (list "env" "LC_ALL=C"))
@@ -246,7 +251,7 @@ Output is written to the current buffer."
   "Run PROG with args and return the first match for REGEXP in its output.
 PROG is run in DIR, or if that is nil in `default-directory'."
   (with-temp-buffer
-    (apply 'package-build--run-process dir prog args)
+    (apply 'package-build--run-process-1 dir prog args)
     (goto-char (point-min))
     (re-search-forward regexp)
     (match-string-no-properties 1)))
@@ -288,37 +293,35 @@ Returns the package version as a string."
 (defun package-build--checkout-git (name config dir)
   "Check package NAME with config CONFIG out of git into DIR."
   (let ((repo (plist-get config :url)))
-    (with-current-buffer (get-buffer-create "*package-build-checkout*")
-      (goto-char (point-max))
-      (cond
-       ((and (file-exists-p (expand-file-name ".git" dir))
-             (string-equal (package-build--git-repo dir) repo))
-        (package-build--princ-exists dir)
-        (package-build--run-process dir "git" "fetch" "--all" "--tags"))
-       (t
-        (when (file-exists-p dir)
-          (delete-directory dir t))
-        (package-build--princ-checkout repo dir)
-        (package-build--run-process nil "git" "clone" repo dir)))
-      (if package-build-stable
-          (cl-destructuring-bind (tag . version)
-              (or (package-build--find-version-newest
-                   (process-lines "git" "tag")
-                   (plist-get config :version-regexp))
-                  (error "No valid stable versions found for %s" name))
-            (package-build--update-git-to-ref dir (concat "tags/" tag))
-            version)
-        (package-build--update-git-to-ref
-         dir (or (plist-get config :commit)
-                 (concat "origin/"
-                         (or (plist-get config :branch)
-                             (package-build--git-head-branch dir)))))
-        (package-build--parse-time
-         (car (process-lines
-               "git" "log" "--first-parent" "-n1" "--pretty=format:'\%ci'"
-               (package-build--expand-source-file-list dir config))) "\
+    (cond
+     ((and (file-exists-p (expand-file-name ".git" dir))
+           (string-equal (package-build--git-repo dir) repo))
+      (package-build--princ-exists dir)
+      (package-build--run-process dir "git" "fetch" "--all" "--tags"))
+     (t
+      (when (file-exists-p dir)
+        (delete-directory dir t))
+      (package-build--princ-checkout repo dir)
+      (package-build--run-process nil "git" "clone" repo dir)))
+    (if package-build-stable
+        (cl-destructuring-bind (tag . version)
+            (or (package-build--find-version-newest
+                 (process-lines "git" "tag")
+                 (plist-get config :version-regexp))
+                (error "No valid stable versions found for %s" name))
+          (package-build--update-git-to-ref dir (concat "tags/" tag))
+          version)
+      (package-build--update-git-to-ref
+       dir (or (plist-get config :commit)
+               (concat "origin/"
+                       (or (plist-get config :branch)
+                           (package-build--git-head-branch dir)))))
+      (package-build--parse-time
+       (car (process-lines
+             "git" "log" "--first-parent" "-n1" "--pretty=format:'\%ci'"
+             (package-build--expand-source-file-list dir config))) "\
 \\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\} \
-[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\( [+-][0-9]\\{4\\}\\)?\\)")))))
+[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\( [+-][0-9]\\{4\\}\\)?\\)"))))
 
 (defun package-build--git-head-branch (dir)
   "Get the current git repo for DIR."
@@ -360,37 +363,35 @@ Returns the package version as a string."
 (defun package-build--checkout-hg (name config dir)
   "Check package NAME with config CONFIG out of hg into DIR."
   (let ((repo (plist-get config :url)))
-    (with-current-buffer (get-buffer-create "*package-build-checkout*")
-      (goto-char (point-max))
-      (cond
-       ((and (file-exists-p (expand-file-name ".hg" dir))
-             (string-equal (package-build--hg-repo dir) repo))
-        (package-build--princ-exists dir)
-        (package-build--run-process dir "hg" "pull")
-        (package-build--run-process dir "hg" "update"))
-       (t
-        (when (file-exists-p dir)
-          (delete-directory dir t))
-        (package-build--princ-checkout repo dir)
-        (package-build--run-process nil "hg" "clone" repo dir)))
-      (if package-build-stable
-          (cl-destructuring-bind (tag . version)
-              (or (package-build--find-version-newest
-                   (mapcar (lambda (line)
-                             ;; Remove space and rev that follow ref.
-                             (string-match "\\`[^ ]+" line)
-                             (match-string 0))
-                           (process-lines "hg" "tags"))
-                   (plist-get config :version-regexp))
-                  (error "No valid stable versions found for %s" name))
-            (package-build--run-process dir "hg" "update" tag)
-            version)
-        (package-build--parse-time
-         (car (process-lines
-               "hg" "log" "--style" "compact" "-l1"
-               (package-build--expand-source-file-list dir config))) "\
+    (cond
+     ((and (file-exists-p (expand-file-name ".hg" dir))
+           (string-equal (package-build--hg-repo dir) repo))
+      (package-build--princ-exists dir)
+      (package-build--run-process dir "hg" "pull")
+      (package-build--run-process dir "hg" "update"))
+     (t
+      (when (file-exists-p dir)
+        (delete-directory dir t))
+      (package-build--princ-checkout repo dir)
+      (package-build--run-process nil "hg" "clone" repo dir)))
+    (if package-build-stable
+        (cl-destructuring-bind (tag . version)
+            (or (package-build--find-version-newest
+                 (mapcar (lambda (line)
+                           ;; Remove space and rev that follow ref.
+                           (string-match "\\`[^ ]+" line)
+                           (match-string 0))
+                         (process-lines "hg" "tags"))
+                 (plist-get config :version-regexp))
+                (error "No valid stable versions found for %s" name))
+          (package-build--run-process dir "hg" "update" tag)
+          version)
+      (package-build--parse-time
+       (car (process-lines
+             "hg" "log" "--style" "compact" "-l1"
+             (package-build--expand-source-file-list dir config))) "\
 \\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\} \
-[0-9]\\{2\\}:[0-9]\\{2\\}\\( [+-][0-9]\\{4\\}\\)?\\)")))))
+[0-9]\\{2\\}:[0-9]\\{2\\}\\( [+-][0-9]\\{4\\}\\)?\\)"))))
 
 (defun package-build--checkout-bitbucket (name config dir)
   "Check package NAME with config CONFIG out of bitbucket into DIR."
