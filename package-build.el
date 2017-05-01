@@ -313,22 +313,13 @@ Returns the package version as a string."
           version)
       (package-build--update-git-to-ref
        dir (or (plist-get config :commit)
-               (concat "origin/"
-                       (or (plist-get config :branch)
-                           (package-build--git-head-branch dir)))))
+               (concat "origin/" (or (plist-get config :branch) "master"))))
       (package-build--parse-time
        (car (process-lines
              "git" "log" "--first-parent" "-n1" "--pretty=format:'\%ci'"
              (package-build--expand-source-file-list dir config))) "\
 \\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\} \
 [0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\( [+-][0-9]\\{4\\}\\)?\\)"))))
-
-(defun package-build--git-head-branch (dir)
-  "Get the current git repo for DIR."
-  (or (ignore-errors
-        (package-build--run-process-match
-         "HEAD branch: \\(.*\\)" dir "git" "remote" "show" "origin"))
-      "master"))
 
 (defun package-build--git-head-sha (dir)
   "Get the current head SHA for DIR."
