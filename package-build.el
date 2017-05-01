@@ -266,60 +266,60 @@ choose a source-specific fetcher function, which it calls with
 the same arguments.
 
 Returns the package version as a string."
-  (let ((fetcher (plist-get config :fetcher)))
+  (let ((default-directory )
+        (fetcher (plist-get config :fetcher))
+        (url (plist-get config :url)))
     (package-build--message "Fetcher: %s" fetcher)
     (unless (eq fetcher 'wiki)
-      (package-build--message "Source: %s\n"
-                              (or (plist-get config :repo)
-                                  (plist-get config :url)))
-      (funcall (intern (format "package-build--checkout-%s" fetcher))
-               package-name config (file-name-as-directory working-dir)))))
-
-(defun package-build--princ-exists (dir)
-  "Print a message that the contents of DIR will be updated."
-  (package-build--message "Updating %s" dir))
-
-(defun package-build--princ-checkout (repo dir)
-  "Print a message that REPO will be checked out into DIR."
-  (package-build--message "Cloning %s to %s" repo dir))
+      (package-build--message "Source: %s\n" (or (plist-get config :repo) url)))
+    (when (and (file-exists-p working-dir)
+               (or (not (file-exists-p (expand-file-name ".git" working-dir)))
+                   (not (string-equal (let ((default-directory working-dir))
+                                        'verify)
+                                      url))))
+      (package-build--message "Removing invalid %s" working-dir)
+      (delete-directory default-directory t))
+    (cond
+     ((file-exists-p working-dir)
+      (package-build--message "Cloning %s to %s" url working-dir)
+      (funcall (intern (format "package-build--clone-%s" fetcher))
+               config (file-name-as-directory working-dir)))
+     (t
+      (package-build--message "Fetching %s" working-dir)
+      (funcall (intern (format "package-build--fetch-%s" fetcher))
+               config (file-name-as-directory working-dir))))
+    (funcall (intern (format "package-build--checkout-%s" fetcher))
+             package-name config (file-name-as-directory working-dir))))
 
 ;;;; Git
 
-(defun package-build--git-repo (dir)
-  "Get the current git repo for DIR."
-  (let ((default-directory dir))
-    (car (process-lines "git" "config" "remote.origin.url"))))
+(defun package-build--git-repo ()
+  (car (process-lines "git" "config" "remote.origin.url")))
+
+(defun package-build--clone-git (config dir)
+  (package-build--run-process nil "git" "clone" (plist-get config :url) dir))
+
+(defun package-build--fetch-git ()
+  (package-build--run-process dir "git" "fetch" "--all" "--tags"))
 
 (defun package-build--checkout-git (name config dir)
-  "Check package NAME with config CONFIG out of git into DIR."
-  (let ((repo (plist-get config :url)))
-    (cond
-     ((and (file-exists-p (expand-file-name ".git" dir))
-           (string-equal (package-build--git-repo dir) repo))
-      (package-build--princ-exists dir)
-      (package-build--run-process dir "git" "fetch" "--all" "--tags"))
-     (t
-      (when (file-exists-p dir)
-        (delete-directory dir t))
-      (package-build--princ-checkout repo dir)
-      (package-build--run-process nil "git" "clone" repo dir)))
-    (if package-build-stable
-        (cl-destructuring-bind (tag . version)
-            (or (package-build--find-version-newest
-                 (process-lines "git" "tag")
-                 (plist-get config :version-regexp))
-                (error "No valid stable versions found for %s" name))
-          (package-build--update-git-to-ref dir (concat "tags/" tag))
-          version)
-      (package-build--update-git-to-ref
-       dir (or (plist-get config :commit)
-               (concat "origin/" (or (plist-get config :branch) "master"))))
-      (package-build--parse-time
-       (car (process-lines
-             "git" "log" "--first-parent" "-n1" "--pretty=format:'\%ci'"
-             (package-build--expand-source-file-list dir config))) "\
+  (if package-build-stable
+      (cl-destructuring-bind (tag . version)
+          (or (package-build--find-version-newest
+               (process-lines "git" "tag")
+               (plist-get config :version-regexp))
+              (error "No valid stable versions found for %s" name))
+        (package-build--update-git-to-ref dir (concat "tags/" tag))
+        version)
+    (package-build--update-git-to-ref
+     dir (or (plist-get config :commit)
+             (concat "origin/" (or (plist-get config :branch) "master"))))
+    (package-build--parse-time
+     (car (process-lines
+           "git" "log" "--first-parent" "-n1" "--pretty=format:'\%ci'"
+           (package-build--expand-source-file-list dir config))) "\
 \\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\} \
-[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\( [+-][0-9]\\{4\\}\\)?\\)"))))
+[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\( [+-][0-9]\\{4\\}\\)?\\)")))
 
 (defun package-build--git-head-sha (dir)
   "Get the current head SHA for DIR."
