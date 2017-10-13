@@ -47,32 +47,19 @@
 
 ;;; Options
 
-(defconst package-build--melpa-base
-  (file-name-directory
-   (directory-file-name
-    (file-name-directory (or load-file-name (buffer-file-name))))))
-
 (defgroup package-build nil
   "Facilities for building package.el-compliant packages from upstream source code."
   :group 'development)
 
-(defcustom package-build-working-dir
-  (expand-file-name "working/" package-build--melpa-base)
-  "Directory in which to keep checkouts."
-  :group 'package-build
-  :type 'string)
-
-(defcustom package-build-archive-dir
-  (expand-file-name "packages/" package-build--melpa-base)
-  "Directory in which to keep compiled archives."
-  :group 'package-build
-  :type 'string)
-
-(defcustom package-build-recipes-dir
-  (expand-file-name "recipes/" package-build--melpa-base)
-  "Directory containing recipe files."
-  :group 'package-build
-  :type 'string)
+(defcustom package-build-base-dir
+  ;; TODO How should Melpa say hello?
+  (if (getenv "INSIDE_MELPA")
+      (file-name-directory
+       (directory-file-name
+        (file-name-directory (or load-file-name (buffer-file-name)))))
+    ;; TODO What is a good default we can agree on?
+    (expand-file-name ".melpa" user-emacs-directory))
+  "")
 
 (defcustom package-build-verbose t
   "When non-nil, then print additional progress information."
@@ -143,6 +130,18 @@ Use function `package-build-archive-alist' instead of this variable.")
   "Default value for :files attribute in recipes.")
 
 ;;; Utilities
+
+(defun package-build-working-dir ()
+  "Return the directory in which to keep checkouts."
+  (expand-file-name "working/" package-build-base-dir))
+
+(defun package-build-archive-dir ()
+  "Return the directory in which to keep compiled archives."
+  (expand-file-name "packages/" package-build-base-dir))
+
+(defun package-build-recipes-dir ()
+  "Return the directory containing recipe files."
+  (expand-file-name "recipes/" package-build-base-dir))
 
 (defun package-build--message (format-string &rest args)
   "Behave like `message' if `package-build-verbose' is non-nil.
@@ -648,7 +647,7 @@ If PKG-INFO is nil, an empty one is created."
          (flavour (aref pkg-info 3)))
     (expand-file-name
      (format "%s-%s.%s" name version (if (eq flavour 'single) "el" "tar"))
-     package-build-archive-dir)))
+     (package-build-archive-dir))))
 
 (defun package-build--entry-file-name (archive-entry)
   "Return the path of the file in which the package for ARCHIVE-ENTRY is stored."
@@ -657,7 +656,7 @@ If PKG-INFO is nil, an empty one is created."
          (version (package-version-join (aref pkg-info 0))))
     (expand-file-name
      (format "%s-%s.entry" name version)
-     package-build-archive-dir)))
+     (package-build-archive-dir))))
 
 (defun package-build--delete-file-if-exists (file)
   "Delete FILE if it exists."
@@ -721,12 +720,12 @@ to build the recipe."
 
 (defun package-build--read-recipes ()
   "Return a list of data structures for all recipes."
-  (cl-loop for file-name in (directory-files package-build-recipes-dir t "^[^.]")
+  (cl-loop for file-name in (directory-files (package-build-recipes-dir) t "^[^.]")
            collect (package-build--read-recipe file-name)))
 
 (defun package-build--read-recipes-ignore-errors ()
   "Return a list of data structures for all recipes."
-  (cl-loop for file-name in (directory-files package-build-recipes-dir t "^[^.]")
+  (cl-loop for file-name in (directory-files (package-build-recipes-dir) t "^[^.]")
            for pkg-info = (condition-case err
                               (package-build--read-recipe file-name)
                             (error (package-build--message
@@ -919,8 +918,8 @@ and a cl struct in Emacs HEAD.  This wrapper normalises the results."
 (defun package-build--up-to-date-p (name version)
   "Return non-nil if there is an up-to-date package for NAME with the given VERSION."
   (let* ((package-file-base (expand-file-name (format "%s-%s." name version)
-                                              package-build-archive-dir))
-         (recipe-file (expand-file-name name package-build-recipes-dir)))
+                                              (package-build-archive-dir)))
+         (recipe-file (expand-file-name name (package-build-recipes-dir))))
     (cl-dolist (ext '("tar" "el"))
       (let ((package-file (concat package-file-base ext)))
         (when (and (file-newer-than-file-p package-file recipe-file)
@@ -960,16 +959,16 @@ ARCHIVE-ENTRY is destructively modified."
                   (error "Cannot find package %s" name)))
          (pkg-working-dir
           (file-name-as-directory
-           (expand-file-name file-name package-build-working-dir))))
+           (expand-file-name file-name (package-build-working-dir)))))
 
-    (unless (file-exists-p package-build-archive-dir)
-      (package-build--message "Creating directory %s" package-build-archive-dir)
-      (make-directory package-build-archive-dir))
+    (unless (file-exists-p (package-build-archive-dir))
+      (package-build--message "Creating directory %s" (package-build-archive-dir))
+      (make-directory (package-build-archive-dir)))
 
     (package-build--message "\n;;; %s\n" name)
     (let* ((version (package-build-checkout name rcp pkg-working-dir))
            (commit (package-build-get-commit rcp pkg-working-dir))
-           (default-directory package-build-working-dir)
+           (default-directory (package-build-working-dir))
            (start-time (current-time)))
       (if (package-build--up-to-date-p file-name version)
           (package-build--message "Package %s is up to date - skipping." name)
@@ -979,7 +978,7 @@ ARCHIVE-ENTRY is destructively modified."
                                 version
                                 (package-build--config-file-list rcp)
                                 pkg-working-dir
-                                package-build-archive-dir)))
+                                (package-build-archive-dir))))
             (when commit
               (package-build-add-to-archive archive-entry :commit commit))
             (package-build--dump archive-entry
@@ -987,7 +986,7 @@ ARCHIVE-ENTRY is destructively modified."
           (when package-build-write-melpa-badge-images
             (package-build--write-melpa-badge-image
              file-name
-             version package-build-archive-dir))
+             version (package-build-archive-dir)))
           (package-build--message "Built %s in %.3fs, finished at %s"
                                   name
                                   (time-to-seconds (time-since start-time))
@@ -1163,7 +1162,7 @@ Returns the archive entry for the package."
   "Return the archive list."
   (cdr (package-build--read-from-file
         (expand-file-name "archive-contents"
-                          package-build-archive-dir))))
+                          (package-build-archive-dir)))))
 
 (defun package-build-reinitialize ()
   "Forget any information about packages which have already been built."
@@ -1177,14 +1176,14 @@ If FILE-NAME is not specified, the default archive-contents file is used."
   (package-build--dump (cons 1 (package-build--archive-entries))
                        (or file
                            (expand-file-name "archive-contents"
-                                             package-build-archive-dir))
+                                             (package-build-archive-dir)))
                        pretty-print))
 
 (defun package-build--archive-entries ()
   "Read all .entry files from the archive directory and return a list of all entries."
   (let ((entries '()))
     (dolist (new (mapcar 'package-build--read-from-file
-                         (directory-files package-build-archive-dir t
+                         (directory-files (package-build-archive-dir) t
                                           ".*\.entry$"))
                  entries)
       (let ((old (assq (car new) entries)))
@@ -1223,7 +1222,7 @@ If FILE-NAME is not specified, the default archive-contents file is used."
                                         "hg" "bitbucket")
                                   nil t nil nil "github"))))
   (let ((recipe-file (expand-file-name (symbol-name name)
-                                       package-build-recipes-dir)))
+                                       (package-build-recipes-dir))))
     (when (file-exists-p recipe-file)
       (error "Recipe already exists"))
     (find-file recipe-file)
@@ -1242,7 +1241,7 @@ If FILE-NAME is not specified, the default archive-contents file is used."
   (interactive)
   (unless (and (buffer-file-name)
                (file-equal-p (file-name-directory (buffer-file-name))
-                             package-build-recipes-dir))
+                             (package-build-recipes-dir)))
     (error "Buffer is not visiting a recipe"))
   (when (buffer-modified-p)
     (if (y-or-n-p (format "Save file %s? " buffer-file-name))
