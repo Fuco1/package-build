@@ -285,44 +285,42 @@ Returns the package version as a string."
   (package-build--run-process-match
    "Fetch URL: \\(.*\\)" dir "git" "remote" "show" "-n" "origin"))
 
-(defun package-build--checkout-git (name config dir)
-  "Check package NAME with config CONFIG out of git into DIR."
-  (let ((repo (plist-get config :url))
-        (commit (or (plist-get config :commit)
-                    (let ((branch (plist-get config :branch)))
-                      (when branch
-                        (concat "origin/" branch))))))
-    (with-current-buffer (get-buffer-create "*package-build-checkout*")
-      (goto-char (point-max))
-      (cond
-       ((and (file-exists-p (expand-file-name ".git" dir))
-             (string-equal (package-build--git-repo dir) repo))
-        (package-build--princ-exists dir)
-        (package-build--run-process dir "git" "fetch" "--all" "--tags"))
-       (t
-        (when (file-exists-p dir)
-          (delete-directory dir t))
-        (package-build--princ-checkout repo dir)
-        (package-build--run-process nil "git" "clone" repo dir)))
-      (if package-build-stable
-          (cl-destructuring-bind (tag . version)
-              (or (package-build--find-version-newest
-                   (process-lines "git" "tag")
-                   (plist-get config :version-regexp))
-                  (error "No valid stable versions found for %s" name))
-            ;; Using reset --hard here to comply with what's used for
-            ;; unstable, but maybe this should be a checkout?
-            (package-build--update-git-to-ref dir (concat "tags/" tag))
-            version)
-        (package-build--update-git-to-ref
-         dir (or commit (concat "origin/" (package-build--git-head-branch dir))))
-        (package-build--parse-time
-         (car (process-lines
-               "git" "log" "--first-parent" "-n1" "--pretty=format:'\%ci'"
-               (package-build--expand-source-file-list dir config))) "\
-\\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\} \
-[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\( [+-][0-9]\\{4\\}\\)?\\)")))))
+(cl-defmethod package-build-clone ((rcp package-git-recipe))
+  (cond ((and (file-exists-p (expand-file-name ".git" dir))
+              (string-equal (package-build--git-repo dir) url))
+         (package-build--princ-exists dir)
+         (package-build--run-process dir "git" "fetch" "--all" "--tags"))
+        (t
+         (when (file-exists-p dir)
+           (delete-directory dir t))
+         (package-build--princ-checkout url dir)
+         (package-build--run-process nil "git" "clone" url dir))))
 
+(cl-defmethod package-build-checkout ((rcp package-git-recipe))
+  (with-slots (name url dir commit branch) rcp
+    (package-build-clone rcp)
+    (if package-build-stable
+        (let ((tag-version
+               (or (package-build--find-version-newest
+                    (process-lines "git" "tag")
+                    (plist-get config :version-regexp))
+                   (error "No valid stable versions found for %s" name)))))
+      ;; Using reset --hard here to comply with what's used for
+      ;; unstable, but maybe this should be a checkout?
+      (package-build--update-git-to-ref
+       dir (concat "tags/" (car tag-version)))
+      ;; Return the parsed version as a string
+      (package-version-join (cdr tag-version)))
+    (package-build--update-git-to-ref
+     dir (or commit
+             (concat "origin/"
+                     (or branch (package-build--git-head-branch dir)))))
+    (package-build--parse-time
+     (car (process-lines
+           "git" "log" "--first-parent" "-n1" "--pretty=format:'\%ci'"
+           (package-build--expand-source-file-list dir config))))))
+
+;;;;; x
 (defun package-build--git-head-branch (dir)
   "Get the current git repo for DIR."
   (or (ignore-errors
@@ -342,38 +340,27 @@ Returns the package version as a string."
   (package-build--run-process dir "git" "submodule" "sync" "--recursive")
   (package-build--run-process dir "git" "submodule" "update" "--init" "--recursive"))
 
-(defun package-build--checkout-github (name config dir)
-  "Check package NAME with config CONFIG out of github into DIR."
-  (let ((url (format "https://github.com/%s.git" (plist-get config :repo))))
-    (package-build--checkout-git name (plist-put (copy-sequence config) :url url) dir)))
-
-(defun package-build--checkout-gitlab (name config dir)
-  "Check package NAME with config CONFIG out of gitlab into DIR."
-  (let ((url (format "https://gitlab.com/%s.git" (plist-get config :repo))))
-    (package-build--checkout-git name (plist-put (copy-sequence config) :url url) dir)))
-
 ;;;; Hg
 
 (defun package-build--hg-repo (dir)
   "Get the current hg repo for DIR."
   (package-build--run-process-match "default = \\(.*\\)" dir "hg" "paths"))
 
-(defun package-build--checkout-hg (name config dir)
-  "Check package NAME with config CONFIG out of hg into DIR."
-  (let ((repo (plist-get config :url)))
+(cl-defmethod package-build-checkout ((rcp package-hg-recipe))
+  (with-slots (name url dir) rcp
     (with-current-buffer (get-buffer-create "*package-build-checkout*")
       (goto-char (point-max))
       (cond
        ((and (file-exists-p (expand-file-name ".hg" dir))
-             (string-equal (package-build--hg-repo dir) repo))
+             (string-equal (package-build--hg-repo dir) url))
         (package-build--princ-exists dir)
         (package-build--run-process dir "hg" "pull")
         (package-build--run-process dir "hg" "update"))
        (t
         (when (file-exists-p dir)
           (delete-directory dir t))
-        (package-build--princ-checkout repo dir)
-        (package-build--run-process nil "hg" "clone" repo dir)))
+        (package-build--princ-checkout url dir)
+        (package-build--run-process nil "hg" "clone" url dir)))
       (if package-build-stable
           (cl-destructuring-bind (tag . version)
               (or (package-build--find-version-newest
@@ -389,14 +376,7 @@ Returns the package version as a string."
         (package-build--parse-time
          (car (process-lines
                "hg" "log" "--style" "compact" "-l1"
-               (package-build--expand-source-file-list dir config))) "\
-\\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\} \
-[0-9]\\{2\\}:[0-9]\\{2\\}\\( [+-][0-9]\\{4\\}\\)?\\)")))))
-
-(defun package-build--checkout-bitbucket (name config dir)
-  "Check package NAME with config CONFIG out of bitbucket into DIR."
-  (let ((url (format "https://bitbucket.com/%s" (plist-get config :repo))))
-    (package-build--checkout-hg name (plist-put (copy-sequence config) :url url) dir)))
+               (package-build--expand-source-file-list dir config))))))))
 
 ;;; Utilities
 
@@ -906,19 +886,15 @@ ARCHIVE-ENTRY is destructively modified."
 (defun package-build-archive (name)
   "Build a package archive for package NAME."
   (interactive (list (package-build--package-name-completing-read)))
-  (let* ((file-name (symbol-name name))
-         (rcp (or (cdr (assoc name (package-build-recipe-alist)))
-                  (error "Cannot find package %s" name)))
-         (pkg-working-dir
-          (file-name-as-directory
-           (expand-file-name file-name package-build-working-dir))))
-
+  (let ((file-name (symbol-name name))
+        (rcp (or (cdr (assoc name (package-build-recipe-alist))) ; TODO
+                 (error "Cannot find package %s" name))))
     (unless (file-exists-p package-build-archive-dir)
       (package-build--message "Creating directory %s" package-build-archive-dir)
       (make-directory package-build-archive-dir))
 
     (package-build--message "\n;;; %s\n" name)
-    (let* ((version (package-build-checkout name rcp pkg-working-dir))
+    (let* ((version (package-build-checkout rcp))
            (commit (package-build-get-commit rcp pkg-working-dir))
            (default-directory package-build-working-dir)
            (start-time (current-time)))
@@ -929,7 +905,7 @@ ARCHIVE-ENTRY is destructively modified."
                                 file-name
                                 version
                                 (package-build--config-file-list rcp)
-                                pkg-working-dir
+                                nil ; FIXME pkg-working-dir
                                 package-build-archive-dir)))
             (when commit
               (package-build-add-to-archive archive-entry :commit commit))
